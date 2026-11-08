@@ -1,0 +1,11 @@
+1
+00:00:00,000 --> 00:00:01,500
+Chalo, edit shuru karte hain.
+
+2
+00:00:01,300 --> 00:00:02,000
+Pehle timeline par subtitle ki timing check kar lo.
+
+3
+00:00:02,000 --> 00:00:04,500
+अब अगला शॉट देखते हैं।

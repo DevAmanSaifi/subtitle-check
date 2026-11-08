@@ -1,0 +1,219 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="light">
+<title>Subtitle Check</title>
+<style>
+  :root { font: 16px/1.55 system-ui, sans-serif; color: #21252c; background: #f6f5f2; }
+  * { box-sizing: border-box; }
+  body { margin: 0; }
+  main { max-width: 760px; margin: 2.5rem auto; padding: 0 1rem 2rem; }
+  h1 { font-size: clamp(2.4rem, 8vw, 4rem); line-height: 1; letter-spacing: -.05em; margin: .4rem 0 .8rem; }
+  h2 { font-size: 1.3rem; margin: 0 0 .65rem; }
+  p { margin: .45rem 0 1rem; }
+  .eyebrow { color: #8d1b24; font-weight: 700; }
+  section { margin: 1.1rem 0; padding: 1.25rem; background: white; border: 1px solid #dedad3; border-radius: .85rem; }
+  label { display: block; font-weight: 650; margin-bottom: .25rem; }
+  input, textarea, button { font: inherit; }
+  input[type="file"] { max-width: 100%; margin-bottom: .9rem; }
+  textarea, input[type="number"] { border: 1px solid #858990; border-radius: .35rem; padding: .5rem; background: white; color: inherit; }
+  textarea { display: block; width: 100%; min-height: 10rem; resize: vertical; font: .9rem/1.5 ui-monospace, monospace; }
+  .controls { display: flex; flex-wrap: wrap; align-items: end; gap: .8rem 1rem; margin-top: .9rem; }
+  input[type="number"] { width: 6rem; }
+  button { border-radius: .35rem; border: 1px solid #8d1b24; padding: .5rem .8rem; cursor: pointer; }
+  .primary { background: #8d1b24; color: white; font-weight: 650; }
+  .secondary { background: white; color: #8d1b24; }
+  :focus-visible { outline: 3px solid #2c64ae; outline-offset: 2px; }
+  .hint { color: #505560; font-size: .9rem; margin: .75rem 0 0; }
+  ul { padding-left: 1.4rem; margin: .6rem 0 0; }
+  li { padding: .25rem 0; overflow-wrap: anywhere; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="eyebrow">SRT quality check</div>
+    <h1>Subtitle Check</h1>
+    <p>Catch timing and readability issues in Hindi, Hinglish, and other SRT subtitles before export.</p>
+  </header>
+  <section aria-labelledby="input-heading">
+    <h2 id="input-heading">Your subtitles</h2>
+    <form id="checker">
+      <label for="file">Open an SRT file</label>
+      <input id="file" type="file" accept=".srt,text/plain" aria-describedby="file-status">
+      <div id="file-status" role="status"></div>
+      <label for="subtitles">Or paste SRT text</label>
+      <textarea id="subtitles" spellcheck="false"></textarea>
+      <div class="controls">
+        <div>
+          <label for="speed">Max characters/sec</label>
+          <input id="speed" type="number" min="1" max="100" step="any" value="20" required>
+        </div>
+        <div>
+          <label for="width">Max characters/line</label>
+          <input id="width" type="number" min="1" max="300" step="1" value="42" required>
+        </div>
+        <button class="primary" type="submit">Check subtitles</button>
+        <button id="demo" class="secondary" type="button">Try a sample</button>
+      </div>
+      <p class="hint">Runs in your browser. Subtitle text stays on your device.</p>
+    </form>
+  </section>
+  <section id="results" aria-labelledby="results-heading" hidden>
+    <h2 id="results-heading">Results</h2>
+    <div id="summary" role="status"></div>
+    <ul id="issues" hidden></ul>
+  </section>
+</main>
+<script>
+"use strict";
+
+const timecode = "([0-9]{2,}):([0-5][0-9]):([0-5][0-9])[,.]([0-9]{3})";
+const timingLine = new RegExp("^" + timecode + "[ \\t]+-->[ \\t]+" + timecode + "(?:[ \\t]+.*)?$");
+const segmenter = typeof Intl.Segmenter === "function"
+  ? new Intl.Segmenter(undefined, {granularity: "grapheme"}) : null;
+
+function characterCount(text) {
+  const plain = text.replace(/<\/?(?:b|i|u|s|font)(?:\s+[^<>]*)?>/gi, "").trim();
+  return segmenter ? Array.from(segmenter.segment(plain)).length : Array.from(plain).length;
+}
+
+function milliseconds([hours, minutes, seconds, fraction]) {
+  return Number(hours) * 3600000 + Number(minutes) * 60000
+    + Number(seconds) * 1000 + Number(fraction);
+}
+
+function checkSubtitles(input, maxSpeed, maxWidth) {
+  const normalized = input.replace(/^\uFEFF/, "").replace(/\r\n?/g, "\n").trim();
+  const blocks = normalized ? normalized.split(/\n(?:[ \t]*\n)+/) : [];
+  const notes = blocks.map(() => []);
+  const validTimes = [];
+
+  blocks.forEach((block, index) => {
+    const lines = block.split("\n");
+    const hasNumber = /^\d+$/.test(lines[0].trim());
+    const timingIndex = hasNumber ? 1 : 0;
+    if (!hasNumber) notes[index].push("Missing cue number.");
+
+    const match = timingLine.exec((lines[timingIndex] || "").trim());
+    if (!match) {
+      notes[index].push("Missing or invalid timestamp line.");
+      return;
+    }
+
+    const caption = lines.slice(timingIndex + 1);
+    if (caption.some(line => line.includes("-->") && timingLine.test(line.trim()))) {
+      notes[index].push("A timestamp appears inside the caption. Check for a missing blank line between cues.");
+    }
+    const lengths = caption.map(characterCount);
+    const visibleCount = lengths.reduce((sum, length) => sum + length, 0);
+    if (visibleCount === 0) notes[index].push("Empty caption.");
+    lengths.forEach((length, line) => {
+      if (length > maxWidth) {
+        notes[index].push("Line " + (line + 1) + " has " + length + " characters. Limit: " + maxWidth + ".");
+      }
+    });
+
+    const start = milliseconds(match.slice(1, 5));
+    const end = milliseconds(match.slice(5, 9));
+    if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || end <= start) {
+      notes[index].push("Invalid duration. The end must be later than the start.");
+      return;
+    }
+    const rate = visibleCount * 1000 / (end - start);
+    if (rate > maxSpeed) {
+      notes[index].push("Reads at " + rate.toFixed(1) + " characters/sec. Limit: " + maxSpeed + ".");
+    }
+    const previous = validTimes[validTimes.length - 1];
+    if (previous && start < previous.start) notes[index].push("Starts before the preceding timed cue.");
+    validTimes.push({index, start, end});
+  });
+
+  validTimes.sort((left, right) => left.start - right.start || left.index - right.index);
+  let latestEnd = null;
+  for (const cue of validTimes) {
+    if (latestEnd && cue.start < latestEnd.end) {
+      notes[cue.index].push("Overlaps cue block " + (latestEnd.index + 1) + ".");
+    }
+    if (!latestEnd || cue.end > latestEnd.end) latestEnd = cue;
+  }
+
+  const issues = notes.flatMap((messages, index) =>
+    messages.map(message => "Cue block " + (index + 1) + " — " + message));
+  return {cueCount: blocks.length, issues};
+}
+
+const fileInput = document.getElementById("file");
+const fileStatus = document.getElementById("file-status");
+const subtitles = document.getElementById("subtitles");
+const results = document.getElementById("results");
+const summary = document.getElementById("summary");
+const issueList = document.getElementById("issues");
+const sample = [
+  "1", "00:00:00,000 --> 00:00:01,500", "Chalo, edit shuru karte hain.", "",
+  "2", "00:00:01,300 --> 00:00:02,000", "Pehle timeline par subtitle ki timing check kar lo.", "",
+  "3", "00:00:02,000 --> 00:00:04,500", "अब अगला शॉट देखते हैं।"
+].join("\n");
+let inputVersion = 0;
+
+function hideResults() {
+  results.hidden = true;
+}
+
+fileInput.addEventListener("change", async () => {
+  const version = ++inputVersion;
+  const file = fileInput.files[0];
+  if (!file) return;
+  hideResults();
+  fileStatus.textContent = "Reading file…";
+  try {
+    const bytes = new Uint8Array(await file.arrayBuffer());
+    if (version !== inputVersion) return;
+    let encoding = "utf-8";
+    if (bytes[0] === 0xff && bytes[1] === 0xfe) encoding = "utf-16le";
+    if (bytes[0] === 0xfe && bytes[1] === 0xff) encoding = "utf-16be";
+    subtitles.value = new TextDecoder(encoding, {fatal: true}).decode(bytes);
+    fileStatus.textContent = "Loaded " + file.name + ". Select Check subtitles to review it.";
+  } catch {
+    if (version !== inputVersion) return;
+    subtitles.value = "";
+    fileInput.value = "";
+    fileStatus.textContent = "Couldn’t read the file. Save it as UTF-8 or paste the subtitle text.";
+  }
+});
+
+subtitles.addEventListener("input", () => {
+  ++inputVersion;
+  fileInput.value = "";
+  fileStatus.textContent = "";
+  hideResults();
+});
+
+document.getElementById("demo").addEventListener("click", () => {
+  subtitles.value = sample;
+  subtitles.dispatchEvent(new Event("input"));
+  document.getElementById("checker").requestSubmit();
+});
+
+document.getElementById("checker").addEventListener("submit", event => {
+  event.preventDefault();
+  const maxSpeed = Number(document.getElementById("speed").value);
+  const maxWidth = Number(document.getElementById("width").value);
+  const report = checkSubtitles(subtitles.value, maxSpeed, maxWidth);
+  issueList.replaceChildren();
+  for (const issue of report.issues) {
+    const item = document.createElement("li");
+    item.textContent = issue;
+    issueList.append(item);
+  }
+  issueList.hidden = report.issues.length === 0;
+  results.hidden = false;
+  summary.textContent = report.cueCount
+    ? report.cueCount + " cue blocks checked. " + report.issues.length + " flags."
+    : "Open an SRT file or paste subtitle text to get started.";
+});
+</script>
+</body>
+</html>
